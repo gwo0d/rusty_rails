@@ -234,10 +234,12 @@ async fn main() {
     arrival_board.get_data_from_api().await.unwrap();
 
     loop {
+        clear_terminal();
+        
         println!("{}", format_departure_board(&departure_board));
         println!("{}", format_arrival_board(&arrival_board));
+        
         tokio::time::sleep(tokio::time::Duration::from_secs(REFRESH_RATE)).await;
-        clear_terminal();
 
         departure_board.clear_departures();
         departure_board.get_data_from_api().await.unwrap();
