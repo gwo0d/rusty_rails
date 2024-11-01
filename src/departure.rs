@@ -19,24 +19,41 @@ impl Departure {
         Self { destination, scheduled_time, expected_time, calling_points, platform, status, delay_reason, operator }
     }
 
+    pub fn summarise_to_string(&self) -> String {
+        format!(
+            "Destination: {}\n\
+            ETA: {}",
+            self.destination,
+            self.eta()
+        )
+    }
+
     pub fn destination(&self) -> &str {
         &self.destination
     }
 
-    pub fn scheduled_time(&self) -> DateTime<Utc> {
-        self.scheduled_time
+    pub fn scheduled_time(&self) -> &DateTime<Utc> {
+        &self.scheduled_time
     }
 
-    pub fn expected_time(&self) -> Option<DateTime<Utc>> {
-        self.expected_time
+    pub fn expected_time(&self) -> &Option<DateTime<Utc>> {
+        &self.expected_time
+    }
+
+    pub fn eta(&self) -> &DateTime<Utc> {
+        if self.expected_time.is_some() {
+            &self.expected_time.unwrap()
+        } else {
+            &self.scheduled_time
+        }
     }
 
     pub fn calling_points(&self) -> &Vec<String> {
         &self.calling_points
     }
 
-    pub fn platform(&self) -> Option<u8> {
-        self.platform
+    pub fn platform(&self) -> &Option<u8> {
+        &self.platform
     }
 
     pub fn status(&self) -> &str {
