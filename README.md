@@ -17,7 +17,7 @@ This application uses the National Rail Enquiries Darwin API to get live service
 
 1.  **Clone the repository:**
     ```sh
-    git clone https://github.com/your-username/rusty-rails.git
+    git clone https://github.com/<your username>/rusty-rails.git
     cd rusty-rails
     ```
 
@@ -28,6 +28,12 @@ This application uses the National Rail Enquiries Darwin API to get live service
 
 3.  **Run the application:**
     The executable will be located in the `target/release/` directory.
+
+4.  **Install the executable locally** *(Optional)*:
+    Run the following from the repository root after compilation.
+    ```sh
+    cargo install --path .
+    ```
 
 ## Usage
 
@@ -75,7 +81,8 @@ This application requires an API key from National Rail Enquiries. To get a key,
 Once you have your API key, create a `.env` file in the root of the project and add the following line:
 
 ```
-DARWIN_API_KEY=your_api_key_here
+DEP_API_KEY=<your Live Departure Board API key>
+ARR_API_KEY=<your Live Arrival Board API key>
 ```
 
 ## License
