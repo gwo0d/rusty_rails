@@ -28,7 +28,7 @@ jobs:
         run: cargo test --verbose
 
       - name: Get executable sizes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request')
         id: sizes
         run: |
           debug_size=$(stat -c%s target/debug/rusty_rails)
@@ -37,7 +37,7 @@ jobs:
           echo "release_size=$(numfmt --to=iec-i --suffix=B --format="%.2f" $release_size)" >> $GITHUB_OUTPUT
 
       - name: Update README.md
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request')
         run: |
           sed -i "s/Debug%20Build-.*-blue/Debug%20Build-${{ steps.sizes.outputs.debug_size }}-blue/" README.md
           sed -i "s/Release%20Build-.*-blue/Release%20Build-${{ steps.sizes.outputs.release_size }}-blue/" README.md
