@@ -10,43 +10,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-test:
+  build:
+
     runs-on: ubuntu-latest
+
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build debug executable
-        run: cargo build --verbose
-
-      - name: Build release executable
-        run: cargo build --release --verbose
-
-      - name: Run tests
-        run: cargo test --verbose
-
-      - name: Get executable sizes
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request')
-        id: sizes
-        run: |
-          debug_size=$(stat -c%s target/debug/rusty_rails)
-          release_size=$(stat -c%s target/release/rusty_rails)
-          echo "debug_size=$(numfmt --to=iec-i --suffix=B --format="%.2f" $debug_size)" >> $GITHUB_OUTPUT
-          echo "release_size=$(numfmt --to=iec-i --suffix=B --format="%.2f" $release_size)" >> $GITHUB_OUTPUT
-
-      - name: Update README.md
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request')
-        run: |
-          sed -i "s/Debug%20Build-.*-blue/Debug%20Build-${{ steps.sizes.outputs.debug_size }}-blue/" README.md
-          sed -i "s/Release%20Build-.*-blue/Release%20Build-${{ steps.sizes.outputs.release_size }}-blue/" README.md
-
-      - name: Commit and push changes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add README.md
-          git commit -m "Update file size badges [skip ci]" || echo "No changes to commit"
-          git push || echo "No changes to push"
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
