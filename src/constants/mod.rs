@@ -54,15 +54,13 @@ impl fmt::Display for ConfigError {
         match self {
             ConfigError::MissingVar(var) => write!(
                 f,
-                "Required environment variable '{}' is not set. \
-                Provide it in your shell or a .env file.",
-                var
+                "Required environment variable '{var}' is not set. \
+                Provide it in your shell or a .env file."
             ),
             ConfigError::EmptyVar(var) => write!(
                 f,
-                "Environment variable '{}' is set but empty. \
-                It must contain a non-empty API key.",
-                var
+                "Environment variable '{var}' is set but empty. \
+                It must contain a non-empty API key."
             ),
         }
     }
