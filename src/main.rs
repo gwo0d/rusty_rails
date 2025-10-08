@@ -29,7 +29,9 @@ const REFRESH_INTERVAL_SECS: u64 = 15;
 
 /// Defines the command-line arguments for the Rusty Rails application.
 ///
-/// Uses `clap` for parsing and validation.
+/// This struct uses `clap` to parse and validate command-line arguments. It
+/// defines the main command structure, including subcommands for `departures`
+/// and `arrivals`, and an optional argument for the number of rows to display.
 #[derive(Parser, Debug)]
 #[command(
     name = "rusty_rails",
@@ -49,6 +51,9 @@ struct Cli {
 }
 
 /// Enumerates the available subcommands for the CLI.
+///
+/// This enum defines the `departures` and `arrivals` subcommands, each of which
+/// requires a `station_code` argument. It also specifies aliases for convenience.
 #[derive(Parser, Debug)]
 enum Commands {
     /// Fetches and displays the departure board for a given station.
@@ -69,9 +74,11 @@ enum Commands {
 
 /// A guard struct to ensure terminal raw mode is disabled when it goes out of scope.
 ///
-/// This uses the RAII (Resource Acquisition Is Initialization) pattern to automatically
-/// clean up the terminal state, preventing the terminal from being left in raw mode
-/// in case of an error or normal exit.
+/// This struct uses the RAII (Resource Acquisition Is Initialization) pattern.
+/// When an instance of `RawModeGuard` is created, it doesn't perform any action,
+/// but when it is dropped (goes out of scope), its `drop` implementation is
+/// automatically called. This ensures that `disable_raw_mode()` is always called,
+/// preventing the terminal from being left in a raw state on exit or panic.
 struct RawModeGuard;
 
 impl Drop for RawModeGuard {
@@ -83,13 +90,16 @@ impl Drop for RawModeGuard {
 
 /// Creates and configures a new `comfy_table::Table` with default styling.
 ///
+/// This function initializes a new table with UTF-8 presets for borders and
+/// corners, and styles the headers to be bold and center-aligned.
+///
 /// # Arguments
 ///
 /// * `headers` - A vector of string slices that will be used as the table headers.
 ///
 /// # Returns
 ///
-/// A `Table` instance with presets for borders, corners, and header styling.
+/// A `Table` instance ready for content to be added.
 fn create_table(headers: Vec<&str>) -> Table {
     let mut table = Table::new();
     table
@@ -115,6 +125,27 @@ fn create_table(headers: Vec<&str>) -> Table {
 ///
 /// A formatted `String` in the format "Location Name (CRS)" with an optional
 /// "via" line if present.
+///
+/// # Example
+///
+/// ```
+/// use rusty_rails::service::Station;
+///
+/// let station_with_via = Station {
+///     location_name: "Gatwick Airport".to_string(),
+///     crs: "GTW".to_string(),
+///     via: Some("via Redhill".to_string()),
+/// };
+/// assert_eq!(format_station(&station_with_via), "Gatwick Airport (GTW)
+/// via Redhill");
+///
+/// let station_without_via = Station {
+///     location_name: "London Victoria".to_string(),
+///     crs: "VIC".to_string(),
+///     via: None,
+/// };
+/// assert_eq!(format_station(&station_without_via), "London Victoria (VIC)");
+/// ```
 fn format_station(station: &Station) -> String {
     let mut result = format!("{} ({})", station.location_name, station.crs);
     if let Some(via) = &station.via {
@@ -129,8 +160,9 @@ fn format_station(station: &Station) -> String {
 
 /// Applies color to the expected time cell based on its content.
 ///
-/// "On time" is colored green, while any other status (e.g., "Delayed", "Cancelled")
-/// is colored red.
+/// "On time" is colored green, while any other status (e.g., "Delayed", "Cancelled",
+/// or a specific time) is colored red. This provides a quick visual cue for the
+/// status of a service.
 ///
 /// # Arguments
 ///
@@ -153,10 +185,15 @@ fn colourise_expected(expected: &str) -> Cell {
 
 /// Prints a list of train services to the console in a formatted table.
 ///
+/// This function constructs and prints a table of train services. The first
+/// column of the table is context-dependent: it shows "Destination" for a
+/// departure board and "Origin" for an arrival board.
+///
 /// # Arguments
 ///
 /// * `services` - A vector of `Service` structs to be displayed.
-/// * `kind` - The type of board (`Departures` or `Arrivals`) which determines the table layout.
+/// * `kind` - The type of board (`Departures` or `Arrivals`), which determines
+///   the table layout and content.
 fn print_services(services: Vec<Service>, kind: BoardKind) {
     let is_departures = matches!(kind, BoardKind::Departures);
     let headers = if is_departures {
@@ -209,17 +246,21 @@ fn print_services(services: Vec<Service>, kind: BoardKind) {
 
 /// Fetches service data from the API, clears the screen, and prints the board.
 ///
+/// This function orchestrates the process of updating the display. It calls the
+/// service layer to get the latest board data, clears the terminal, and then
+/// prints the newly fetched information. If no services are found, it displays
+/// a corresponding message.
+///
 /// # Arguments
 ///
 /// * `station_code` - The station code (CRS) for which to fetch the board.
 /// * `kind` - The type of board to fetch (`Departures` or `Arrivals`).
 /// * `num_rows` - An optional number of services to limit the results to.
 ///
-/// # Returns
+/// # Errors
 ///
-/// * `Ok(())` - The board was successfully fetched and printed.
-/// * `Err(Box<dyn Error>)` - An error occurred while retrieving data from the
-///   service layer or clearing/updating the terminal output.
+/// This function will return an error if fetching the data from the service
+/// layer fails or if clearing the terminal screen fails.
 async fn fetch_and_print(
     station_code: &str,
     kind: BoardKind,
@@ -322,9 +363,13 @@ via Redhill";
 
 /// The main entry point for the application.
 ///
-/// This function initializes the application, parses command-line arguments,
-/// and enters a loop to fetch and display train service information. The loop
-/// handles user input for exiting and periodic refreshes.
+/// This function initializes the application by performing the following steps:
+/// 1. Loads environment variables from a `.env` file.
+/// 2. Validates required API keys if the `fail-fast-config` feature is enabled.
+/// 3. Parses command-line arguments to determine the station and board type.
+/// 4. Performs an initial fetch and print of the service board.
+/// 5. Enters a main loop that listens for user input and periodically refreshes
+///    the data. The loop exits when any key is pressed.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Load environment variables from a .env file, if it exists.
