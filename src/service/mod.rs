@@ -5,9 +5,18 @@
 //! functions to fetch and process train service boards (departures and arrivals).
 
 use crate::constants::{ARR_BASE_URL, ConfigError, DEP_BASE_URL, arr_api_key, dep_api_key};
+use crate::error::AppError;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::convert::TryFrom;
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ServiceConversionError {
+    #[error("API response is missing the destination station")]
+    MissingDestination,
+    #[error("API response is missing the origin station")]
+    MissingOrigin,
+}
 
 /// A lazily initialized, shared `reqwest::Client` for making HTTP requests.
 /// Using a single client instance is more efficient as it reuses connection pools.
@@ -157,7 +166,7 @@ pub struct Board {
 /// conversion fails gracefully if the first (and only expected) station in these
 /// lists is missing, ensuring the application only deals with valid services.
 impl TryFrom<ApiService> for Service {
-    type Error = &'static str;
+    type Error = ServiceConversionError;
 
     /// Converts an `ApiService` into a `Service`.
     ///
@@ -172,12 +181,12 @@ impl TryFrom<ApiService> for Service {
             .destination
             .into_iter()
             .next()
-            .ok_or("Missing destination")?;
+            .ok_or(ServiceConversionError::MissingDestination)?;
         let origin = api_service
             .origin
             .into_iter()
             .next()
-            .ok_or("Missing origin")?;
+            .ok_or(ServiceConversionError::MissingOrigin)?;
 
         Ok(Service {
             destination,
@@ -268,7 +277,7 @@ pub async fn try_get_board(
     kind: BoardKind,
     station_code: &str,
     num_rows: Option<u8>,
-) -> Result<Board, Box<dyn std::error::Error>> {
+) -> Result<Board, AppError> {
     let api_key = kind.api_key()?;
     let board = fetch_board(kind.base_url(), api_key, station_code, num_rows).await?;
     Ok(board)
@@ -336,7 +345,10 @@ mod tests {
 
         let result = Service::try_from(api_service);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Missing destination");
+        assert_eq!(
+            result.unwrap_err(),
+            ServiceConversionError::MissingDestination
+        );
     }
 
     #[test]
@@ -358,7 +370,7 @@ mod tests {
 
         let result = Service::try_from(api_service);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Missing origin");
+        assert_eq!(result.unwrap_err(), ServiceConversionError::MissingOrigin);
     }
 
     #[tokio::test]

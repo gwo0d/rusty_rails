@@ -17,12 +17,14 @@ use crossterm::event::{self, Event};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dotenvy::dotenv;
 use service::{BoardKind, Service, Station};
-use std::error::Error;
 use std::time::Duration;
 use tokio::time;
 
 mod constants;
+mod error;
 mod service;
+
+use error::AppError;
 
 /// The interval in seconds at which the train service board will automatically refresh.
 const REFRESH_INTERVAL_SECS: u64 = 15;
@@ -149,11 +151,7 @@ fn create_table(headers: Vec<&str>) -> Table {
 fn format_station(station: &Station) -> String {
     let mut result = format!("{} ({})", station.location_name, station.crs);
     if let Some(via) = &station.via {
-        result.push_str(&format!(
-            "
-{}",
-            via
-        ));
+        result.push_str(&format!("\n{via}"));
     }
     result
 }
@@ -172,15 +170,15 @@ fn format_station(station: &Station) -> String {
 ///
 /// A `Cell` with appropriate color and styling.
 fn colourise_expected(expected: &str) -> Cell {
-    let mut cell = Cell::new(expected.to_string())
-        .add_attribute(Attribute::Bold)
-        .set_alignment(CellAlignment::Center);
-    if expected.eq_ignore_ascii_case("On time") {
-        cell = cell.fg(Color::Green);
+    let color = if expected.eq_ignore_ascii_case("On time") {
+        Color::Green
     } else {
-        cell = cell.fg(Color::Red);
-    }
-    cell
+        Color::Red
+    };
+    Cell::new(expected)
+        .add_attribute(Attribute::Bold)
+        .set_alignment(CellAlignment::Center)
+        .fg(color)
 }
 
 /// Prints a list of train services to the console in a formatted table.
@@ -194,7 +192,7 @@ fn colourise_expected(expected: &str) -> Cell {
 /// * `services` - A vector of `Service` structs to be displayed.
 /// * `kind` - The type of board (`Departures` or `Arrivals`), which determines
 ///   the table layout and content.
-fn print_services(services: Vec<Service>, kind: BoardKind) {
+fn print_services(services: &[Service], kind: BoardKind) {
     let is_departures = matches!(kind, BoardKind::Departures);
     let headers = if is_departures {
         vec![
@@ -214,34 +212,31 @@ fn print_services(services: Vec<Service>, kind: BoardKind) {
         let (station_cell, scheduled_time, expected_time) = if is_departures {
             (
                 Cell::new(format_station(&service.destination)),
-                service.std.unwrap_or_default(),
-                service.etd.unwrap_or_default(),
+                service.std.as_deref().unwrap_or_default(),
+                service.etd.as_deref().unwrap_or_default(),
             )
         } else {
             (
                 Cell::new(format_station(&service.origin)),
-                service.sta.unwrap_or_default(),
-                service.eta.unwrap_or_default(),
+                service.sta.as_deref().unwrap_or_default(),
+                service.eta.as_deref().unwrap_or_default(),
             )
         };
 
         table.add_row(vec![
             station_cell,
-            Cell::new(service.platform.unwrap_or_else(|| "--".to_string()))
+            Cell::new(service.platform.as_deref().unwrap_or("--"))
                 .set_alignment(CellAlignment::Center),
-            Cell::new(service.operator).set_alignment(CellAlignment::Center),
+            Cell::new(&service.operator).set_alignment(CellAlignment::Center),
             Cell::new(scheduled_time).set_alignment(CellAlignment::Center),
-            colourise_expected(&expected_time),
+            colourise_expected(expected_time),
         ]);
     }
 
     println!("{table}");
 
     // Print exit/refresh instructions.
-    println!(
-        "[1m[3mPress any key to exit. Auto-refresh every {}s.[0m",
-        REFRESH_INTERVAL_SECS
-    );
+    println!("[1m[3mPress any key to exit. Auto-refresh every {REFRESH_INTERVAL_SECS}s.[0m");
 }
 
 /// Fetches service data from the API, clears the screen, and prints the board.
@@ -265,7 +260,7 @@ async fn fetch_and_print(
     station_code: &str,
     kind: BoardKind,
     num_rows: Option<u8>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), AppError> {
     // Fetch the board data from the service module.
     let board = service::try_get_board(kind, station_code, num_rows).await?;
 
@@ -273,7 +268,7 @@ async fn fetch_and_print(
     clearscreen::clear()?;
 
     if board.services.is_empty() {
-        println!("No services found for station code '{}'.", station_code);
+        println!("No services found for station code '{station_code}'.");
     } else {
         // Print the board header.
         println!(
@@ -286,8 +281,92 @@ async fn fetch_and_print(
         println!();
 
         // Print the services in a table.
-        print_services(board.services, kind);
+        print_services(&board.services, kind);
     }
+
+    Ok(())
+}
+
+/// The main entry point for the application.
+///
+/// This function initializes the application by performing the following steps:
+/// 1. Loads environment variables from a `.env` file.
+/// 2. Validates required API keys if the `fail-fast-config` feature is enabled.
+/// 3. Parses command-line arguments to determine the station and board type.
+/// 4. Performs an initial fetch and print of the service board.
+/// 5. Enters a main loop that listens for user input and periodically refreshes
+///    the data. The loop exits when any key is pressed.
+#[tokio::main]
+async fn main() -> Result<(), AppError> {
+    // Load environment variables from a .env file, if it exists.
+    let _ = dotenv();
+
+    // If the `fail-fast-config` feature is enabled, validate required environment
+    // variables at startup and exit if any are missing.
+    #[cfg(feature = "fail-fast-config")]
+    {
+        if let Err(e) = crate::constants::validate_required_keys() {
+            eprintln!("Configuration error: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    // Parse command-line arguments.
+    let cli = Cli::parse();
+    let (station_code, kind) = match cli.command {
+        Commands::Departures { station_code } => (station_code, BoardKind::Departures),
+        Commands::Arrivals { station_code } => (station_code, BoardKind::Arrivals),
+    };
+
+    let num_rows = cli.num_rows;
+
+    // Perform the initial fetch and print.
+    fetch_and_print(&station_code, kind, num_rows).await?;
+
+    // Enable terminal raw mode to capture key presses without requiring Enter.
+    // The `_guard` ensures raw mode is disabled on exit.
+    enable_raw_mode()?;
+    let _guard = RawModeGuard;
+
+    // Set up a timer for periodic refreshes.
+    let mut interval = time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
+
+    // Main event loop.
+    loop {
+        tokio::select! {
+            // Listen for keyboard input in a blocking task.
+            key_res = tokio::task::spawn_blocking(event::read) => {
+                match key_res {
+                    // If any key is pressed, break the loop to exit.
+                    Ok(Ok(Event::Key(_))) => break,
+                    // Ignore other events.
+                    Ok(Ok(_)) => {},
+                    // Ignore read errors.
+                    Ok(Err(_)) => {},
+                    // If the input task itself fails, log the error and exit.
+                    Err(e) => {
+                        eprintln!("\nInput task failed: {e}. Exiting.");
+                        break;
+                    }
+                }
+            }
+            // Trigger a refresh when the interval timer ticks.
+            _ = interval.tick() => {
+                // Temporarily disable raw mode to allow normal printing.
+                disable_raw_mode()?;
+                if let Err(e) = fetch_and_print(&station_code, kind, num_rows).await {
+                    eprintln!("Error refreshing services: {e}");
+                }
+                // Re-enable raw mode.
+                enable_raw_mode()?;
+            }
+        }
+    }
+
+    println!(
+        "
+Exiting..."
+    );
 
     Ok(())
 }
@@ -359,89 +438,4 @@ via Redhill";
             .fg(Color::Red);
         assert_eq!(actual_cell, expected_cell);
     }
-}
-
-/// The main entry point for the application.
-///
-/// This function initializes the application by performing the following steps:
-/// 1. Loads environment variables from a `.env` file.
-/// 2. Validates required API keys if the `fail-fast-config` feature is enabled.
-/// 3. Parses command-line arguments to determine the station and board type.
-/// 4. Performs an initial fetch and print of the service board.
-/// 5. Enters a main loop that listens for user input and periodically refreshes
-///    the data. The loop exits when any key is pressed.
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    // Load environment variables from a .env file, if it exists.
-    let _ = dotenv();
-
-    // If the `fail-fast-config` feature is enabled, validate required environment
-    // variables at startup and exit if any are missing.
-    #[cfg(feature = "fail-fast-config")]
-    {
-        if let Err(e) = crate::constants::validate_required_keys() {
-            eprintln!("Configuration error: {e}");
-            std::process::exit(1);
-        }
-    }
-
-    // Parse command-line arguments.
-    let cli = Cli::parse();
-    let (station_code, kind) = match cli.command {
-        Commands::Departures { station_code } => (station_code, BoardKind::Departures),
-        Commands::Arrivals { station_code } => (station_code, BoardKind::Arrivals),
-    };
-
-    let num_rows = cli.num_rows;
-
-    // Perform the initial fetch and print.
-    fetch_and_print(&station_code, kind, num_rows).await?;
-
-    // Enable terminal raw mode to capture key presses without requiring Enter.
-    // The `_guard` ensures raw mode is disabled on exit.
-    enable_raw_mode()?;
-    let _guard = RawModeGuard;
-
-    // Set up a timer for periodic refreshes.
-    let mut interval = time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
-
-    // Main event loop.
-    loop {
-        tokio::select! {
-            // Listen for keyboard input in a blocking task.
-            key_res = tokio::task::spawn_blocking(event::read) => {
-                match key_res {
-                    // If any key is pressed, break the loop to exit.
-                    Ok(Ok(Event::Key(_))) => break,
-                    // Ignore other events.
-                    Ok(Ok(_)) => {},
-                    // Ignore read errors.
-                    Ok(Err(_)) => {},
-                    // If the input task itself fails, log the error and exit.
-                    Err(e) => {
-                        eprintln!("
-        Input task failed: {}. Exiting.", e);
-                        break;
-                    }
-                }
-            }
-            // Trigger a refresh when the interval timer ticks.
-            _ = interval.tick() => {
-                // Temporarily disable raw mode to allow normal printing.
-                disable_raw_mode()?;
-                if let Err(e) = fetch_and_print(&station_code, kind, num_rows).await {
-                    eprintln!("Error refreshing services: {}", e);
-                }
-                // Re-enable raw mode.
-                enable_raw_mode()?;
-            }
-        }
-    }
-
-    println!(
-        "
-Exiting..."
-    );
-
-    Ok(())
 }
