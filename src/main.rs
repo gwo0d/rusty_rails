@@ -13,16 +13,10 @@ use comfy_table::{
     modifiers::{UTF8_ROUND_CORNERS, UTF8_SOLID_INNER_BORDERS},
     presets::UTF8_FULL,
 };
-use crossterm::{
-    cursor,
-    event::{self, Event},
-    execute, queue,
-    style::Print,
-    terminal::{self, Clear, ClearType},
-};
+use crossterm::event::{self, Event};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dotenvy::dotenv;
-use service::{Board, BoardKind, Station};
-use std::io::{self, Stdout, Write};
+use service::{Board, BoardKind, Service, Station};
 use std::time::Duration;
 use tokio::time;
 
@@ -78,6 +72,22 @@ enum Commands {
         #[arg(help = "The station code to get arrivals for.")]
         station_code: String,
     },
+}
+
+/// A guard struct to ensure terminal raw mode is disabled when it goes out of scope.
+///
+/// This struct uses the RAII (Resource Acquisition Is Initialization) pattern.
+/// When an instance of `RawModeGuard` is created, it doesn't perform any action,
+/// but when it is dropped (goes out of scope), its `drop` implementation is
+/// automatically called. This ensures that `disable_raw_mode()` is always called,
+/// preventing the terminal from being left in a raw state on exit or panic.
+struct RawModeGuard;
+
+impl Drop for RawModeGuard {
+    /// Disables terminal raw mode when the `RawModeGuard` is dropped.
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
 }
 
 /// Creates and configures a new `comfy_table::Table` with default styling.
@@ -171,108 +181,99 @@ fn colourise_expected(expected: &str) -> Cell {
         .fg(color)
 }
 
-/// Clears the screen and prints the given board details using `crossterm`.
+/// Prints a list of train services to the console in a formatted table.
 ///
-/// This function handles all presentation logic. It clears the terminal, queues
-/// all content for printing, and then flushes it to the screen in a single
-/// operation. This approach is compatible with terminal raw mode, as it avoids
-/// mixing `println!` with raw-mode-sensitive input handling.
+/// This function constructs and prints a table of train services. The first
+/// column of the table is context-dependent: it shows "Destination" for a
+/// departure board and "Origin" for an arrival board.
 ///
 /// # Arguments
 ///
-/// * `stdout` - A mutable reference to `io::Stdout`.
+/// * `services` - A vector of `Service` structs to be displayed.
+/// * `kind` - The type of board (`Departures` or `Arrivals`), which determines
+///   the table layout and content.
+fn print_services(services: &[Service], kind: BoardKind) {
+    let is_departures = matches!(kind, BoardKind::Departures);
+    let headers = if is_departures {
+        vec![
+            "Destination",
+            "Platform",
+            "Operator",
+            "Scheduled",
+            "Expected",
+        ]
+    } else {
+        vec!["Origin", "Platform", "Operator", "Scheduled", "Expected"]
+    };
+    let mut table = create_table(headers);
+
+    for service in services {
+        // Destructure service details based on whether it's a departure or arrival.
+        let (station_cell, scheduled_time, expected_time) = if is_departures {
+            (
+                Cell::new(format_station(&service.destination)),
+                service.std.as_deref().unwrap_or_default(),
+                service.etd.as_deref().unwrap_or_default(),
+            )
+        } else {
+            (
+                Cell::new(format_station(&service.origin)),
+                service.sta.as_deref().unwrap_or_default(),
+                service.eta.as_deref().unwrap_or_default(),
+            )
+        };
+
+        table.add_row(vec![
+            station_cell,
+            Cell::new(service.platform.as_deref().unwrap_or("--"))
+                .set_alignment(CellAlignment::Center),
+            Cell::new(&service.operator).set_alignment(CellAlignment::Center),
+            Cell::new(scheduled_time).set_alignment(CellAlignment::Center),
+            colourise_expected(expected_time),
+        ]);
+    }
+
+    println!("{table}");
+
+    // Print exit/refresh instructions.
+    println!("[1m[3mPress any key to exit. Auto-refresh every {REFRESH_INTERVAL_SECS}s.[0m");
+}
+
+/// Clears the screen and prints the given board details.
+///
+/// This function handles the presentation logic. It clears the terminal,
+/// displays a message if no services are available, or prints a formatted
+/// table of services.
+///
+/// # Arguments
+///
 /// * `board` - A reference to the `Board` data to be displayed.
 /// * `kind` - The type of board (`Departures` or `Arrivals`).
 /// * `station_code` - The station code (CRS) used for the query.
 ///
 /// # Errors
 ///
-/// Returns an error if any terminal operations fail.
-fn print_board_details(
-    stdout: &mut Stdout,
-    board: &Board,
-    kind: BoardKind,
-    station_code: &str,
-) -> Result<(), AppError> {
-    // Clear the terminal and move the cursor to the top-left.
-    queue!(stdout, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+/// Returns an error if clearing the screen fails.
+fn print_board_details(board: &Board, kind: BoardKind, station_code: &str) -> Result<(), AppError> {
+    // Clear the terminal screen before printing the new board.
+    clearscreen::clear()?;
 
     if board.services.is_empty() {
-        queue!(
-            stdout,
-            Print(format!(
-                "No services found for station code '{station_code}'.\n"
-            ))
-        )?;
+        println!("No services found for station code '{station_code}'.");
     } else {
         // Print the board header.
-        queue!(
-            stdout,
-            Print(format!(
-                "{} for {} ({})\n",
-                kind.title(),
-                board.location_name,
-                board.crs
-            )),
-            Print(format!(
-                "Last updated: {}\n\n",
-                chrono::Local::now().format("%H:%M:%S")
-            ))
-        )?;
+        println!(
+            "{} for {} ({})",
+            kind.title(),
+            board.location_name,
+            board.crs
+        );
+        println!("Last updated: {}", chrono::Local::now().format("%H:%M:%S"));
+        println!();
 
-        // Build and print the services table.
-        let is_departures = matches!(kind, BoardKind::Departures);
-        let headers = if is_departures {
-            vec![
-                "Destination",
-                "Platform",
-                "Operator",
-                "Scheduled",
-                "Expected",
-            ]
-        } else {
-            vec!["Origin", "Platform", "Operator", "Scheduled", "Expected"]
-        };
-        let mut table = create_table(headers);
-
-        for service in &board.services {
-            let (station_cell, scheduled_time, expected_time) = if is_departures {
-                (
-                    Cell::new(format_station(&service.destination)),
-                    service.std.as_deref().unwrap_or_default(),
-                    service.etd.as_deref().unwrap_or_default(),
-                )
-            } else {
-                (
-                    Cell::new(format_station(&service.origin)),
-                    service.sta.as_deref().unwrap_or_default(),
-                    service.eta.as_deref().unwrap_or_default(),
-                )
-            };
-
-            table.add_row(vec![
-                station_cell,
-                Cell::new(service.platform.as_deref().unwrap_or("--"))
-                    .set_alignment(CellAlignment::Center),
-                Cell::new(&service.operator).set_alignment(CellAlignment::Center),
-                Cell::new(scheduled_time).set_alignment(CellAlignment::Center),
-                colourise_expected(expected_time),
-            ]);
-        }
-
-        queue!(stdout, Print(format!("{table}\n")))?;
+        // Print the services in a table.
+        print_services(&board.services, kind);
     }
-
-    // Print exit/refresh instructions.
-    queue!(
-        stdout,
-        Print(format!(
-            "[1m[3mPress any key to exit. Auto-refresh every {REFRESH_INTERVAL_SECS}s.[0m"
-        ))
-    )?;
-
-    // Flush the buffer to ensure all commands are executed.
-    stdout.flush()?;
 
     Ok(())
 }
@@ -283,11 +284,9 @@ fn print_board_details(
 /// 1. Loads environment variables from a `.env` file.
 /// 2. Validates required API keys if the `fail-fast-config` feature is enabled.
 /// 3. Parses command-line arguments to determine the station and board type.
-/// 4. Sets up the terminal in raw mode.
-/// 5. Performs an initial fetch and print of the service board.
-/// 6. Enters a main loop that listens for user input and periodically refreshes
+/// 4. Performs an initial fetch and print of the service board.
+/// 5. Enters a main loop that listens for user input and periodically refreshes
 ///    the data. The loop exits when any key is pressed.
-/// 7. Restores the terminal to its original state before exiting.
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     // Load environment variables from a .env file, if it exists.
@@ -312,14 +311,14 @@ async fn main() -> Result<(), AppError> {
 
     let num_rows = cli.num_rows;
 
-    // Set up terminal
-    let mut stdout = io::stdout();
-    terminal::enable_raw_mode()?;
-    execute!(stdout, cursor::Hide)?; // Hide cursor
-
     // Perform the initial fetch and print.
     let board = service::try_get_board(kind, &station_code, num_rows).await?;
-    print_board_details(&mut stdout, &board, kind, &station_code)?;
+    print_board_details(&board, kind, &station_code)?;
+
+    // Enable terminal raw mode to capture key presses without requiring Enter.
+    // The `_guard` ensures raw mode is disabled on exit.
+    enable_raw_mode()?;
+    let _guard = RawModeGuard;
 
     // Set up a timer for periodic refreshes.
     let mut interval = time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
@@ -345,40 +344,27 @@ async fn main() -> Result<(), AppError> {
             }
             // Trigger a refresh when the interval timer ticks.
             _ = interval.tick() => {
+                // Fetch the latest data first, while raw mode is still enabled.
                 match service::try_get_board(kind, &station_code, num_rows).await {
                     Ok(board) => {
-                        if let Err(e) = print_board_details(&mut stdout, &board, kind, &station_code) {
-                            // On error, we'll exit the loop and rely on the cleanup logic.
-                            eprintln!("\nError printing board: {e}. Exiting.");
-                            break;
+                        // Now, briefly disable raw mode to print the board.
+                        disable_raw_mode()?;
+                        if let Err(e) = print_board_details(&board, kind, &station_code) {
+                            eprintln!("Error printing board: {e}");
                         }
+                        // Re-enable raw mode immediately after printing.
+                        enable_raw_mode()?;
                     }
                     Err(e) => {
                         // If fetching fails, we can print the error without
-                        // disrupting the display. We move to a line below the
-                        // table to print the error. This is a best-effort
-                        // attempt that assumes a max table height.
-                        queue!(
-                            stdout,
-                            cursor::MoveTo(0, 30),
-                            Print(format!("\nError refreshing services: {e}"))
-                        )?;
-                        stdout.flush()?;
+                        // disabling raw mode, as it won't interfere with input.
+                        eprintln!("Error refreshing services: {e}");
                     }
                 }
             }
         }
     }
 
-    // Restore terminal state
-    execute!(
-        io::stdout(),
-        cursor::Show, // Show cursor again
-    )?;
-    terminal::disable_raw_mode()?;
-
-    // Use a standard println! here because the app is about to exit and raw
-    // mode is disabled.
     println!(
         "
 Exiting..."
