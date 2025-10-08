@@ -2,7 +2,6 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/gwo0d/rusty_rails/rust.yml?branch=main&label=Tests)
 
-
 A command-line interface (CLI) application for fetching and displaying real-time train departure and arrival information from UK train stations.
 
 This application uses the National Rail Enquiries Darwin API to get live service data. It presents the information in a clean, tabular format and automatically refreshes the data every 15 seconds.
