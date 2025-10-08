@@ -17,7 +17,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.47.1", features = ["time", "rt-multi-thread", "macros"] }
 
 [dev-dependencies]
-httpmock = "0.7.0"
+httpmock = "0.8.1"
 
 [features]
 # Default: exit early if configuration invalid.
