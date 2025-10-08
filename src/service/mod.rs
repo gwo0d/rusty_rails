@@ -211,3 +211,222 @@ pub async fn try_get_board(
     let board = fetch_board(kind.base_url(), api_key, station_code, num_rows).await?;
     Ok(board)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+
+    #[test]
+    fn board_kind_title() {
+        assert_eq!(BoardKind::Departures.title(), "Departures");
+        assert_eq!(BoardKind::Arrivals.title(), "Arrivals");
+    }
+
+    #[test]
+    fn board_kind_base_url() {
+        assert_eq!(BoardKind::Departures.base_url(), DEP_BASE_URL);
+        assert_eq!(BoardKind::Arrivals.base_url(), ARR_BASE_URL);
+    }
+
+    #[test]
+    fn service_try_from_api_service_ok() {
+        let api_service = ApiService {
+            destination: vec![Station {
+                location_name: "London Paddington".to_string(),
+                crs: "PAD".to_string(),
+                via: None,
+            }],
+            origin: vec![Station {
+                location_name: "Reading".to_string(),
+                crs: "RDG".to_string(),
+                via: None,
+            }],
+            sta: Some("10:00".to_string()),
+            eta: Some("On time".to_string()),
+            std: Some("10:05".to_string()),
+            etd: Some("On time".to_string()),
+            operator: "GWR".to_string(),
+            platform: Some("1".to_string()),
+        };
+
+        let service = Service::try_from(api_service).unwrap();
+        assert_eq!(service.destination.location_name, "London Paddington");
+        assert_eq!(service.origin.location_name, "Reading");
+    }
+
+    #[test]
+    fn service_try_from_api_service_missing_destination() {
+        let api_service = ApiService {
+            destination: vec![],
+            origin: vec![Station {
+                location_name: "Reading".to_string(),
+                crs: "RDG".to_string(),
+                via: None,
+            }],
+            sta: Some("10:00".to_string()),
+            eta: Some("On time".to_string()),
+            std: Some("10:05".to_string()),
+            etd: Some("On time".to_string()),
+            operator: "GWR".to_string(),
+            platform: Some("1".to_string()),
+        };
+
+        let result = Service::try_from(api_service);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Missing destination");
+    }
+
+    #[test]
+    fn service_try_from_api_service_missing_origin() {
+        let api_service = ApiService {
+            destination: vec![Station {
+                location_name: "London Paddington".to_string(),
+                crs: "PAD".to_string(),
+                via: None,
+            }],
+            origin: vec![],
+            sta: Some("10:00".to_string()),
+            eta: Some("On time".to_string()),
+            std: Some("10:05".to_string()),
+            etd: Some("On time".to_string()),
+            operator: "GWR".to_string(),
+            platform: Some("1".to_string()),
+        };
+
+        let result = Service::try_from(api_service);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Missing origin");
+    }
+
+    #[tokio::test]
+    async fn fetch_board_success() {
+        // Start a mock server.
+        let server = MockServer::start();
+
+        // Create a mock for the API endpoint.
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/LBG")
+                .header("x-apikey", "fake_api_key")
+                .query_param("numRows", "10");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{
+                    "locationName": "London Bridge",
+                    "crs": "LBG",
+                    "trainServices": [
+                        {
+                            "destination": [{"locationName": "Brighton", "crs": "BTN", "via": null}],
+                            "origin": [{"locationName": "London Bridge", "crs": "LBG", "via": null}],
+                            "sta": null,
+                            "eta": null,
+                            "std": "10:00",
+                            "etd": "On time",
+                            "operator": "Thameslink",
+                            "platform": "5"
+                        },
+                        {
+                            "destination": [{"locationName": "Tattenham Corner", "crs": "TAT", "via": null}],
+                            "origin": [{"locationName": "London Bridge", "crs": "LBG", "via": null}],
+                            "sta": null,
+                            "eta": null,
+                            "std": "10:05",
+                            "etd": "10:07",
+                            "operator": "Southern",
+                            "platform": "8"
+                        }
+                    ]
+                }"#);
+        });
+
+        // Call the function under test.
+        let result = fetch_board(&server.base_url(), "fake_api_key", "LBG", Some(10)).await;
+
+        // Assert the mock was called.
+        mock.assert();
+
+        // Assert the result is Ok.
+        assert!(result.is_ok());
+        let board = result.unwrap();
+
+        // Assert the board details are correct.
+        assert_eq!(board.location_name, "London Bridge");
+        assert_eq!(board.crs, "LBG");
+        assert_eq!(board.services.len(), 2);
+
+        // Assert service details are correct.
+        assert_eq!(board.services[0].destination.location_name, "Brighton");
+        assert_eq!(board.services[0].etd, Some("On time".to_string()));
+        assert_eq!(board.services[1].destination.location_name, "Tattenham Corner");
+        assert_eq!(board.services[1].etd, Some("10:07".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_board_empty_services() {
+        let server = MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/EMP");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{
+                    "locationName": "Empty Station",
+                    "crs": "EMP",
+                    "trainServices": []
+                }"#);
+        });
+
+        let result = fetch_board(&server.base_url(), "fake_api_key", "EMP", None).await;
+        mock.assert();
+
+        assert!(result.is_ok());
+        let board = result.unwrap();
+        assert_eq!(board.location_name, "Empty Station");
+        assert_eq!(board.crs, "EMP");
+        assert!(board.services.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_board_filters_invalid_services() {
+        let server = MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/MIX");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{
+                    "locationName": "Mixed Station",
+                    "crs": "MIX",
+                    "trainServices": [
+                        {
+                            "destination": [{"locationName": "Validville", "crs": "VLV", "via": null}],
+                            "origin": [{"locationName": "Mixed Station", "crs": "MIX", "via": null}],
+                            "std": "11:00",
+                            "etd": "On time",
+                            "operator": "Good Trains",
+                            "platform": "1"
+                        },
+                        {
+                            "destination": [],
+                            "origin": [{"locationName": "Mixed Station", "crs": "MIX", "via": null}],
+                            "std": "11:05",
+                            "etd": "Delayed",
+                            "operator": "Bad Trains",
+                            "platform": "2"
+                        }
+                    ]
+                }"#);
+        });
+
+        let result = fetch_board(&server.base_url(), "fake_api_key", "MIX", None).await;
+        mock.assert();
+
+        assert!(result.is_ok());
+        let board = result.unwrap();
+
+        // Only the valid service should be present.
+        assert_eq!(board.services.len(), 1);
+        assert_eq!(board.services[0].destination.location_name, "Validville");
+    }
+}
