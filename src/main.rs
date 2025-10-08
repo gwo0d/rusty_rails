@@ -38,7 +38,7 @@ const REFRESH_INTERVAL_SECS: u64 = 15;
 #[command(
     name = "rusty_rails",
     author = "George O. Wood",
-    version = "2.1.1",
+    version = "2.1.2",
     about = "A CLI for fetching train departure and arrival boards.",
     long_about = None
 )]
