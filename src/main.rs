@@ -251,6 +251,75 @@ async fn fetch_and_print(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::Station;
+    use comfy_table::{Attribute, Cell, CellAlignment, Color};
+
+    #[test]
+    fn test_format_station_no_via() {
+        let station = Station {
+            location_name: "London Victoria".to_string(),
+            crs: "VIC".to_string(),
+            via: None,
+        };
+        assert_eq!(format_station(&station), "London Victoria (VIC)");
+    }
+
+    #[test]
+    fn test_format_station_with_via() {
+        let station = Station {
+            location_name: "Gatwick Airport".to_string(),
+            crs: "GTW".to_string(),
+            via: Some("via Redhill".to_string()),
+        };
+        let expected = "Gatwick Airport (GTW)
+via Redhill";
+        assert_eq!(format_station(&station), expected);
+    }
+
+    #[test]
+    fn test_colourise_expected_on_time() {
+        let actual_cell = colourise_expected("On time");
+        let expected_cell = Cell::new("On time")
+            .add_attribute(Attribute::Bold)
+            .set_alignment(CellAlignment::Center)
+            .fg(Color::Green);
+        assert_eq!(actual_cell, expected_cell);
+    }
+
+    #[test]
+    fn test_colourise_expected_delayed() {
+        let actual_cell = colourise_expected("Delayed");
+        let expected_cell = Cell::new("Delayed")
+            .add_attribute(Attribute::Bold)
+            .set_alignment(CellAlignment::Center)
+            .fg(Color::Red);
+        assert_eq!(actual_cell, expected_cell);
+    }
+
+    #[test]
+    fn test_colourise_expected_cancelled() {
+        let actual_cell = colourise_expected("Cancelled");
+        let expected_cell = Cell::new("Cancelled")
+            .add_attribute(Attribute::Bold)
+            .set_alignment(CellAlignment::Center)
+            .fg(Color::Red);
+        assert_eq!(actual_cell, expected_cell);
+    }
+
+    #[test]
+    fn test_colourise_expected_numerical_time() {
+        let actual_cell = colourise_expected("10:15");
+        let expected_cell = Cell::new("10:15")
+            .add_attribute(Attribute::Bold)
+            .set_alignment(CellAlignment::Center)
+            .fg(Color::Red);
+        assert_eq!(actual_cell, expected_cell);
+    }
+}
+
 /// The main entry point for the application.
 ///
 /// This function initializes the application, parses command-line arguments,
