@@ -358,7 +358,10 @@ mod tests {
         // Assert service details are correct.
         assert_eq!(board.services[0].destination.location_name, "Brighton");
         assert_eq!(board.services[0].etd, Some("On time".to_string()));
-        assert_eq!(board.services[1].destination.location_name, "Tattenham Corner");
+        assert_eq!(
+            board.services[1].destination.location_name,
+            "Tattenham Corner"
+        );
         assert_eq!(board.services[1].etd, Some("10:07".to_string()));
     }
 
@@ -370,11 +373,13 @@ mod tests {
             when.method(GET).path("/EMP");
             then.status(200)
                 .header("content-type", "application/json")
-                .body(r#"{
+                .body(
+                    r#"{
                     "locationName": "Empty Station",
                     "crs": "EMP",
                     "trainServices": []
-                }"#);
+                }"#,
+                );
         });
 
         let result = fetch_board(&server.base_url(), "fake_api_key", "EMP", None).await;
