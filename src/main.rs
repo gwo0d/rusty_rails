@@ -16,7 +16,7 @@ use comfy_table::{
 use crossterm::event::{self, Event};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dotenvy::dotenv;
-use service::{BoardKind, Service, Station};
+use service::{Board, BoardKind, Service, Station};
 use std::time::Duration;
 use tokio::time;
 
@@ -38,7 +38,7 @@ const REFRESH_INTERVAL_SECS: u64 = 15;
 #[command(
     name = "rusty_rails",
     author = "George O. Wood",
-    version = "2.1.2",
+    version = "2.1.3",
     about = "A CLI for fetching train departure and arrival boards.",
     long_about = None
 )]
@@ -239,31 +239,22 @@ fn print_services(services: &[Service], kind: BoardKind) {
     println!("[1m[3mPress any key to exit. Auto-refresh every {REFRESH_INTERVAL_SECS}s.[0m");
 }
 
-/// Fetches service data from the API, clears the screen, and prints the board.
+/// Clears the screen and prints the given board details.
 ///
-/// This function orchestrates the process of updating the display. It calls the
-/// service layer to get the latest board data, clears the terminal, and then
-/// prints the newly fetched information. If no services are found, it displays
-/// a corresponding message.
+/// This function handles the presentation logic. It clears the terminal,
+/// displays a message if no services are available, or prints a formatted
+/// table of services.
 ///
 /// # Arguments
 ///
-/// * `station_code` - The station code (CRS) for which to fetch the board.
-/// * `kind` - The type of board to fetch (`Departures` or `Arrivals`).
-/// * `num_rows` - An optional number of services to limit the results to.
+/// * `board` - A reference to the `Board` data to be displayed.
+/// * `kind` - The type of board (`Departures` or `Arrivals`).
+/// * `station_code` - The station code (CRS) used for the query.
 ///
 /// # Errors
 ///
-/// This function will return an error if fetching the data from the service
-/// layer fails or if clearing the terminal screen fails.
-async fn fetch_and_print(
-    station_code: &str,
-    kind: BoardKind,
-    num_rows: Option<u8>,
-) -> Result<(), AppError> {
-    // Fetch the board data from the service module.
-    let board = service::try_get_board(kind, station_code, num_rows).await?;
-
+/// Returns an error if clearing the screen fails.
+fn print_board_details(board: &Board, kind: BoardKind, station_code: &str) -> Result<(), AppError> {
     // Clear the terminal screen before printing the new board.
     clearscreen::clear()?;
 
@@ -321,7 +312,8 @@ async fn main() -> Result<(), AppError> {
     let num_rows = cli.num_rows;
 
     // Perform the initial fetch and print.
-    fetch_and_print(&station_code, kind, num_rows).await?;
+    let board = service::try_get_board(kind, &station_code, num_rows).await?;
+    print_board_details(&board, kind, &station_code)?;
 
     // Enable terminal raw mode to capture key presses without requiring Enter.
     // The `_guard` ensures raw mode is disabled on exit.
@@ -352,13 +344,23 @@ async fn main() -> Result<(), AppError> {
             }
             // Trigger a refresh when the interval timer ticks.
             _ = interval.tick() => {
-                // Temporarily disable raw mode to allow normal printing.
-                disable_raw_mode()?;
-                if let Err(e) = fetch_and_print(&station_code, kind, num_rows).await {
-                    eprintln!("Error refreshing services: {e}");
+                // Fetch the latest data first, while raw mode is still enabled.
+                match service::try_get_board(kind, &station_code, num_rows).await {
+                    Ok(board) => {
+                        // Now, briefly disable raw mode to print the board.
+                        disable_raw_mode()?;
+                        if let Err(e) = print_board_details(&board, kind, &station_code) {
+                            eprintln!("Error printing board: {e}");
+                        }
+                        // Re-enable raw mode immediately after printing.
+                        enable_raw_mode()?;
+                    }
+                    Err(e) => {
+                        // If fetching fails, we can print the error without
+                        // disabling raw mode, as it won't interfere with input.
+                        eprintln!("Error refreshing services: {e}");
+                    }
                 }
-                // Re-enable raw mode.
-                enable_raw_mode()?;
             }
         }
     }
