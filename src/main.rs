@@ -38,7 +38,7 @@ const REFRESH_INTERVAL_SECS: u64 = 15;
 #[command(
     name = "rusty_rails",
     author = "George O. Wood",
-    version = "2.1.2",
+    version = "2.1.3",
     about = "A CLI for fetching train departure and arrival boards.",
     long_about = None
 )]
@@ -254,11 +254,7 @@ fn print_services(services: &[Service], kind: BoardKind) {
 /// # Errors
 ///
 /// Returns an error if clearing the screen fails.
-fn print_board_details(
-    board: &Board,
-    kind: BoardKind,
-    station_code: &str,
-) -> Result<(), AppError> {
+fn print_board_details(board: &Board, kind: BoardKind, station_code: &str) -> Result<(), AppError> {
     // Clear the terminal screen before printing the new board.
     clearscreen::clear()?;
 
