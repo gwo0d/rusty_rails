@@ -1,0 +1,333 @@
+//! # Rusty Rails
+//!
+//! A command-line interface (CLI) application for fetching and displaying
+//! real-time train departure and arrival information from UK train stations.
+//!
+//! This application uses the National Rail Enquiries Darwin API to get live
+//! service data. It presents the information in a clean, tabular format and
+//! automatically refreshes the data periodically.
+
+use clap::Parser;
+use comfy_table::{
+    Attribute, Cell, CellAlignment, Color, ContentArrangement, Table,
+    modifiers::{UTF8_ROUND_CORNERS, UTF8_SOLID_INNER_BORDERS},
+    presets::UTF8_FULL,
+};
+use crossterm::event::{self, Event};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use dotenvy::dotenv;
+use service::{BoardKind, Service, Station};
+use std::error::Error;
+use std::time::Duration;
+use tokio::time;
+
+mod constants;
+mod service;
+
+/// The interval in seconds at which the train service board will automatically refresh.
+const REFRESH_INTERVAL_SECS: u64 = 15;
+
+/// Defines the command-line arguments for the Rusty Rails application.
+///
+/// Uses `clap` for parsing and validation.
+#[derive(Parser, Debug)]
+#[command(
+    name = "rusty_rails",
+    author = "George O. Wood",
+    version = "2.1.1",
+    about = "A CLI for fetching train departure and arrival boards.",
+    long_about = None
+)]
+struct Cli {
+    /// The specific command to execute (e.g., departures or arrivals).
+    #[command(subcommand)]
+    command: Commands,
+
+    /// Optional: The number of rows (services) to display in the board.
+    #[arg(short, long, help = "Number of rows to display.")]
+    num_rows: Option<u8>,
+}
+
+/// Enumerates the available subcommands for the CLI.
+#[derive(Parser, Debug)]
+enum Commands {
+    /// Fetches and displays the departure board for a given station.
+    #[command(name = "departures", visible_aliases = ["d", "dep"])]
+    Departures {
+        /// The 3-letter station code (CRS) to get departures for.
+        #[arg(help = "The station code to get departures for.")]
+        station_code: String,
+    },
+    /// Fetches and displays the arrival board for a given station.
+    #[command(name = "arrivals", visible_aliases = ["a", "arr"])]
+    Arrivals {
+        /// The 3-letter station code (CRS) to get arrivals for.
+        #[arg(help = "The station code to get arrivals for.")]
+        station_code: String,
+    },
+}
+
+/// A guard struct to ensure terminal raw mode is disabled when it goes out of scope.
+///
+/// This uses the RAII (Resource Acquisition Is Initialization) pattern to automatically
+/// clean up the terminal state, preventing the terminal from being left in raw mode
+/// in case of an error or normal exit.
+struct RawModeGuard;
+
+impl Drop for RawModeGuard {
+    /// Disables terminal raw mode when the `RawModeGuard` is dropped.
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+/// Creates and configures a new `comfy_table::Table` with default styling.
+///
+/// # Arguments
+///
+/// * `headers` - A vector of string slices that will be used as the table headers.
+///
+/// # Returns
+///
+/// A `Table` instance with presets for borders, corners, and header styling.
+fn create_table(headers: Vec<&str>) -> Table {
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .apply_modifier(UTF8_SOLID_INNER_BORDERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(headers.into_iter().map(|h| {
+            Cell::new(h)
+                .add_attribute(Attribute::Bold)
+                .set_alignment(CellAlignment::Center)
+        }));
+    table
+}
+
+/// Formats station information, including an optional "via" text.
+///
+/// # Arguments
+///
+/// * `station` - A reference to a `Station` struct containing location details.
+///
+/// # Returns
+///
+/// A formatted `String` in the format "Location Name (CRS)" with an optional
+/// "via" line if present.
+fn format_station(station: &Station) -> String {
+    let mut result = format!("{} ({})", station.location_name, station.crs);
+    if let Some(via) = &station.via {
+        result.push_str(&format!(
+            "
+{}",
+            via
+        ));
+    }
+    result
+}
+
+/// Applies color to the expected time cell based on its content.
+///
+/// "On time" is colored green, while any other status (e.g., "Delayed", "Cancelled")
+/// is colored red.
+///
+/// # Arguments
+///
+/// * `expected` - A string slice representing the expected time or status.
+///
+/// # Returns
+///
+/// A `Cell` with appropriate color and styling.
+fn colourise_expected(expected: &str) -> Cell {
+    let mut cell = Cell::new(expected.to_string())
+        .add_attribute(Attribute::Bold)
+        .set_alignment(CellAlignment::Center);
+    if expected.eq_ignore_ascii_case("On time") {
+        cell = cell.fg(Color::Green);
+    } else {
+        cell = cell.fg(Color::Red);
+    }
+    cell
+}
+
+/// Prints a list of train services to the console in a formatted table.
+///
+/// # Arguments
+///
+/// * `services` - A vector of `Service` structs to be displayed.
+/// * `kind` - The type of board (`Departures` or `Arrivals`) which determines the table layout.
+fn print_services(services: Vec<Service>, kind: BoardKind) {
+    let is_departures = matches!(kind, BoardKind::Departures);
+    let headers = if is_departures {
+        vec![
+            "Destination",
+            "Platform",
+            "Operator",
+            "Scheduled",
+            "Expected",
+        ]
+    } else {
+        vec!["Origin", "Platform", "Operator", "Scheduled", "Expected"]
+    };
+    let mut table = create_table(headers);
+
+    for service in services {
+        // Destructure service details based on whether it's a departure or arrival.
+        let (station_cell, scheduled_time, expected_time) = if is_departures {
+            (
+                Cell::new(format_station(&service.destination)),
+                service.std.unwrap_or_default(),
+                service.etd.unwrap_or_default(),
+            )
+        } else {
+            (
+                Cell::new(format_station(&service.origin)),
+                service.sta.unwrap_or_default(),
+                service.eta.unwrap_or_default(),
+            )
+        };
+
+        table.add_row(vec![
+            station_cell,
+            Cell::new(service.platform.unwrap_or_else(|| "--".to_string()))
+                .set_alignment(CellAlignment::Center),
+            Cell::new(service.operator).set_alignment(CellAlignment::Center),
+            Cell::new(scheduled_time).set_alignment(CellAlignment::Center),
+            colourise_expected(&expected_time),
+        ]);
+    }
+
+    println!("{table}");
+
+    // Print exit/refresh instructions.
+    println!(
+        "[1m[3mPress any key to exit. Auto-refresh every {}s.[0m",
+        REFRESH_INTERVAL_SECS
+    );
+}
+
+/// Fetches service data from the API, clears the screen, and prints the board.
+///
+/// # Arguments
+///
+/// * `station_code` - The station code (CRS) for which to fetch the board.
+/// * `kind` - The type of board to fetch (`Departures` or `Arrivals`).
+/// * `num_rows` - An optional number of services to limit the results to.
+///
+/// # Returns
+///
+/// * `Ok(())` - The board was successfully fetched and printed.
+/// * `Err(Box<dyn Error>)` - An error occurred while retrieving data from the
+///   service layer or clearing/updating the terminal output.
+async fn fetch_and_print(
+    station_code: &str,
+    kind: BoardKind,
+    num_rows: Option<u8>,
+) -> Result<(), Box<dyn Error>> {
+    // Fetch the board data from the service module.
+    let board = service::try_get_board(kind, station_code, num_rows).await?;
+
+    // Clear the terminal screen before printing the new board.
+    clearscreen::clear()?;
+
+    if board.services.is_empty() {
+        println!("No services found for station code '{}'.", station_code);
+    } else {
+        // Print the board header.
+        println!(
+            "{} for {} ({})",
+            kind.title(),
+            board.location_name,
+            board.crs
+        );
+        println!("Last updated: {}", chrono::Local::now().format("%H:%M:%S"));
+        println!();
+
+        // Print the services in a table.
+        print_services(board.services, kind);
+    }
+
+    Ok(())
+}
+
+/// The main entry point for the application.
+///
+/// This function initializes the application, parses command-line arguments,
+/// and enters a loop to fetch and display train service information. The loop
+/// handles user input for exiting and periodic refreshes.
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    // Load environment variables from a .env file, if it exists.
+    let _ = dotenv();
+
+    // If the `fail-fast-config` feature is enabled, validate required environment
+    // variables at startup and exit if any are missing.
+    #[cfg(feature = "fail-fast-config")]
+    {
+        if let Err(e) = crate::constants::validate_required_keys() {
+            eprintln!("Configuration error: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    // Parse command-line arguments.
+    let cli = Cli::parse();
+    let (station_code, kind) = match cli.command {
+        Commands::Departures { station_code } => (station_code, BoardKind::Departures),
+        Commands::Arrivals { station_code } => (station_code, BoardKind::Arrivals),
+    };
+
+    let num_rows = cli.num_rows;
+
+    // Perform the initial fetch and print.
+    fetch_and_print(&station_code, kind, num_rows).await?;
+
+    // Enable terminal raw mode to capture key presses without requiring Enter.
+    // The `_guard` ensures raw mode is disabled on exit.
+    enable_raw_mode()?;
+    let _guard = RawModeGuard;
+
+    // Set up a timer for periodic refreshes.
+    let mut interval = time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
+
+    // Main event loop.
+    loop {
+        tokio::select! {
+            // Listen for keyboard input in a blocking task.
+            key_res = tokio::task::spawn_blocking(event::read) => {
+                match key_res {
+                    // If any key is pressed, break the loop to exit.
+                    Ok(Ok(Event::Key(_))) => break,
+                    // Ignore other events.
+                    Ok(Ok(_)) => {},
+                    // Ignore read errors.
+                    Ok(Err(_)) => {},
+                    // If the input task itself fails, log the error and exit.
+                    Err(e) => {
+                        eprintln!("
+        Input task failed: {}. Exiting.", e);
+                        break;
+                    }
+                }
+            }
+            // Trigger a refresh when the interval timer ticks.
+            _ = interval.tick() => {
+                // Temporarily disable raw mode to allow normal printing.
+                disable_raw_mode()?;
+                if let Err(e) = fetch_and_print(&station_code, kind, num_rows).await {
+                    eprintln!("Error refreshing services: {}", e);
+                }
+                // Re-enable raw mode.
+                enable_raw_mode()?;
+            }
+        }
+    }
+
+    println!(
+        "
+Exiting..."
+    );
+
+    Ok(())
+}
