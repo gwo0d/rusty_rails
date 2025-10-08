@@ -236,9 +236,7 @@ fn print_services(services: &[Service], kind: BoardKind) {
     println!("{table}");
 
     // Print exit/refresh instructions.
-    println!(
-        "[1m[3mPress any key to exit. Auto-refresh every {REFRESH_INTERVAL_SECS}s.[0m"
-    );
+    println!("[1m[3mPress any key to exit. Auto-refresh every {REFRESH_INTERVAL_SECS}s.[0m");
 }
 
 /// Fetches service data from the API, clears the screen, and prints the board.
