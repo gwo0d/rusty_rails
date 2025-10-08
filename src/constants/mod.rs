@@ -26,6 +26,30 @@ pub enum ConfigError {
 }
 
 impl fmt::Display for ConfigError {
+    /// Formats the configuration error for display.
+    ///
+    /// This implementation provides a user-friendly error message explaining
+    /// which environment variable is missing or empty and how to fix it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rusty_rails::constants::ConfigError;
+    ///
+    /// let missing_error = ConfigError::MissingVar("API_KEY");
+    /// assert_eq!(
+    ///     missing_error.to_string(),
+    ///     "Required environment variable 'API_KEY' is not set. \
+    ///      Provide it in your shell or a .env file."
+    /// );
+    ///
+    /// let empty_error = ConfigError::EmptyVar("API_KEY");
+    /// assert_eq!(
+    ///     empty_error.to_string(),
+    ///     "Environment variable 'API_KEY' is set but empty. \
+    ///      It must contain a non-empty API key."
+    /// );
+    /// ```
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConfigError::MissingVar(var) => write!(

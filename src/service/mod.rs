@@ -24,6 +24,15 @@ pub enum BoardKind {
 
 impl BoardKind {
     /// Returns the display-friendly title for the board type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rusty_rails::service::BoardKind;
+    ///
+    /// assert_eq!(BoardKind::Departures.title(), "Departures");
+    /// assert_eq!(BoardKind::Arrivals.title(), "Arrivals");
+    /// ```
     pub fn title(&self) -> &'static str {
         match self {
             BoardKind::Departures => "Departures",
@@ -48,27 +57,47 @@ impl BoardKind {
     }
 }
 
-/// Internal struct representing the raw JSON response from the API.
+/// Represents the direct JSON response from the National Rail API.
+///
+/// This struct is used internally for deserializing the top-level JSON object
+/// returned by the API. It contains the station details and a list of train services.
+/// The `train_services` field is deserialized into a `Vec<ApiService>`.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct ApiResponse {
+    /// A list of train services returned by the API. Defaults to an empty vector.
     #[serde(default)]
     train_services: Vec<ApiService>,
+    /// The name of the location (station) for which the board was requested.
     location_name: String,
+    /// The CRS code of the location.
     crs: String,
 }
 
-/// Internal struct representing a single train service in the raw API response.
+/// Represents a single train service as returned by the National Rail API.
+///
+/// This struct is used for deserializing individual train service objects from the
+/// API response. It includes details such as origin, destination, times, and operator.
+/// Note that `origin` and `destination` are vectors of `Station` objects, though
+/// typically they contain only one element.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct ApiService {
+    /// A list of `Station` objects representing the service's destination.
     destination: Vec<Station>,
+    /// A list of `Station` objects representing the service's origin.
     origin: Vec<Station>,
-    sta: Option<String>, // Scheduled Time of Arrival
-    eta: Option<String>, // Estimated Time of Arrival
-    std: Option<String>, // Scheduled Time of Departure
-    etd: Option<String>, // Estimated Time of Departure
+    /// The scheduled time of arrival.
+    sta: Option<String>,
+    /// The estimated time of arrival (e.g., "On time", "10:05", "Delayed").
+    eta: Option<String>,
+    /// The scheduled time of departure.
+    std: Option<String>,
+    /// The estimated time of departure (e.g., "On time", "10:05", "Cancelled").
+    etd: Option<String>,
+    /// The name of the train operating company.
     operator: String,
+    /// The platform number for the service, if available.
     platform: Option<String>,
 }
 
@@ -85,6 +114,11 @@ pub struct Station {
 }
 
 /// Represents a single train service, cleaned and processed from the raw API data.
+///
+/// This struct contains the essential information for a single train service,
+/// such as its origin, destination, scheduled and estimated times, operator,
+/// and platform. It is created by converting an `ApiService` struct, which
+/// ensures that only valid and complete service data is used within the application.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Service {
@@ -125,6 +159,14 @@ pub struct Board {
 impl TryFrom<ApiService> for Service {
     type Error = &'static str;
 
+    /// Converts an `ApiService` into a `Service`.
+    ///
+    /// This conversion will fail if the `destination` or `origin` fields in the
+    /// `ApiService` are empty, as a valid service must have both.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `destination` or `origin` lists are empty.
     fn try_from(api_service: ApiService) -> Result<Self, Self::Error> {
         let destination = api_service
             .destination
@@ -202,6 +244,26 @@ async fn fetch_board(
 /// # Errors
 ///
 /// Returns an error if the API key is missing or if the HTTP request fails.
+///
+/// # Example
+///
+/// ```no_run
+/// use rusty_rails::service::{try_get_board, BoardKind};
+///
+/// #[tokio::main]
+/// async fn main() {
+///     // This example assumes that the required environment variables for API keys
+///     // are set.
+///     let board = try_get_board(BoardKind::Departures, "PDM", Some(5)).await;
+///     match board {
+///         Ok(b) => {
+///             println!("Successfully fetched board for {}", b.location_name);
+///             assert_eq!(b.crs, "PDM");
+///         }
+///         Err(e) => eprintln!("Failed to fetch board: {}", e),
+///     }
+/// }
+/// ```
 pub async fn try_get_board(
     kind: BoardKind,
     station_code: &str,

@@ -15,13 +15,16 @@ This application uses the National Rail Enquiries Darwin API to get live service
 
 ## Installation
 
+To get started with Rusty Rails, you'll need to have Rust and Cargo installed. You can find instructions at [rust-lang.org](https://www.rust-lang.org/tools/install).
+
 1.  **Clone the repository:**
     ```sh
-    git clone https://github.com/<your username>/rusty-rails.git
+    git clone https://github.com/gwo0d/rusty_rails.git
     cd rusty-rails
     ```
 
 2.  **Build the project:**
+    For the best performance, build the project in release mode.
     ```sh
     cargo build --release
     ```
@@ -30,7 +33,7 @@ This application uses the National Rail Enquiries Darwin API to get live service
     The executable will be located in the `target/release/` directory.
 
 4.  **Install the executable locally** *(Optional)*:
-    Run the following from the repository root after compilation.
+    For easy access from anywhere in your terminal, you can install the executable to Cargo's bin directory.
     ```sh
     cargo install --path .
     ```
@@ -44,12 +47,12 @@ To use Rusty Rails, you need to provide a subcommand (`departures` or `arrivals`
 To get the departure board for a station, use the `departures` subcommand (or its aliases `d`, `dep`).
 
 ```sh
-./target/release/rusty_rails departures <STATION_CODE>
+rusty_rails departures <STATION_CODE>
 ```
 
 **Example:**
 ```sh
-./target/release/rusty_rails departures PDM
+rusty_rails departures PDM
 ```
 
 ### Get Arrivals
@@ -57,12 +60,12 @@ To get the departure board for a station, use the `departures` subcommand (or it
 To get the arrival board for a station, use the `arrivals` subcommand (or its aliases `a`, `arr`).
 
 ```sh
-./target/release/rusty_rails arrivals <STATION_CODE>
+rusty_rails arrivals <STATION_CODE>
 ```
 
 **Example:**
 ```sh
-./target/release/rusty_rails arrivals PDM
+rusty_rails arrivals PDM
 ```
 
 ### Options
@@ -71,19 +74,35 @@ To get the arrival board for a station, use the `arrivals` subcommand (or its al
 
 **Example:**
 ```sh
-./target/release/rusty_rails departures PDM -n 10
+rusty_rails departures PDM -n 10
 ```
 
 ## Configuration
 
-This application requires an API key from National Rail Enquiries. To get a key, you need to register on the [National Rail Data Portal](https://opendata.nationalrail.co.uk/).
+This application requires API keys from National Rail Enquiries. To get your keys, you need to register on the [National Rail Data Portal](https://opendata.nationalrail.co.uk/).
 
-Once you have your API key, create a `.env` file in the root of the project and add the following line:
+Once you have your API keys, create a `.env` file in the root of the project and add the following lines, replacing the placeholders with your actual keys:
 
 ```
 DEP_API_KEY=<your Live Departure Board API key>
 ARR_API_KEY=<your Live Arrival Board API key>
 ```
+
+**Note:** These environment variables are also required for running the test suite.
+
+## Development
+
+To contribute to Rusty Rails, you'll need to have Rust and Cargo installed.
+
+### Running Tests
+
+The project includes a full suite of unit and integration tests. To run the tests, use the following command:
+
+```sh
+cargo test
+```
+
+Make sure you have configured your `.env` file as described in the **Configuration** section, as the tests require the API keys to be present.
 
 ## License
 
