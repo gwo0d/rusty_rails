@@ -15,12 +15,8 @@ use comfy_table::{
 };
 use dotenvy::dotenv;
 use service::{Board, BoardKind, Service, Station};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
 use std::time::Duration;
-use tokio::time;
+use tokio::{signal, time};
 
 mod constants;
 mod error;
@@ -300,21 +296,6 @@ async fn main() -> Result<(), AppError> {
 
     let num_rows = cli.num_rows;
 
-    // Set up a flag to indicate when the application should exit.
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-
-    // Set up a Ctrl+C handler to gracefully shut down the application.
-    // When Ctrl+C is pressed, the `running` flag is set to false, which
-    // will cause the main loop to terminate.
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    })
-    .map_err(|e| {
-        eprintln!("Error setting Ctrl-C handler: {}", e);
-        AppError::from(e)
-    })?;
-
     // Perform the initial fetch and print.
     let board = service::try_get_board(kind, &station_code, num_rows).await?;
     print_board_details(&board, kind, &station_code)?;
@@ -323,26 +304,30 @@ async fn main() -> Result<(), AppError> {
     let mut interval = time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
 
     // Main application loop.
-    // This loop will continue to run as long as the `running` flag is true.
-    // The flag is set to false when the user presses Ctrl+C.
-    while running.load(Ordering::SeqCst) {
-        // Wait for the refresh interval to elapse.
-        interval.tick().await;
-
-        // If the `running` flag was set to false while waiting, break the loop.
-        if !running.load(Ordering::SeqCst) {
-            break;
-        }
-
-        // Fetch the latest service board data.
-        match service::try_get_board(kind, &station_code, num_rows).await {
-            Ok(board) => {
-                if let Err(e) = print_board_details(&board, kind, &station_code) {
-                    eprintln!("Error printing board: {}", e);
-                }
+    // This loop uses `tokio::select!` to concurrently listen for two events:
+    // 1. A tick from the refresh interval.
+    // 2. A Ctrl+C signal from the user.
+    // The loop terminates immediately when a Ctrl+C signal is received.
+    loop {
+        tokio::select! {
+            // Listen for the Ctrl+C signal.
+            _ = signal::ctrl_c() => {
+                // The signal future resolves, so we break the loop to exit.
+                break;
             }
-            Err(e) => {
-                eprintln!("Error refreshing services: {}", e);
+            // Wait for the refresh interval timer to tick.
+            _ = interval.tick() => {
+                // Fetch the latest service board data.
+                match service::try_get_board(kind, &station_code, num_rows).await {
+                    Ok(board) => {
+                        if let Err(e) = print_board_details(&board, kind, &station_code) {
+                            eprintln!("Error printing board: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error refreshing services: {}", e);
+                    }
+                }
             }
         }
     }
