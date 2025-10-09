@@ -1,6 +1,6 @@
 # Rusty Rails
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/gwo0d/rusty_rails/rust.yml?branch=main&label=Tests)](https://github.com/gwo0d/rusty_rails/actions/workflows/rust.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Actions Workflow](https://github.com/gwo0d/rusty_rails/actions/workflows/rust.yml/badge.svg)](https://github.com/gwo0d/rusty_rails/actions/workflows/rust.yml)
 
 A command-line interface (CLI) application for fetching and displaying real-time train departure and arrival information from UK train stations.
 
