@@ -16,4 +16,7 @@ pub enum AppError {
 
     #[error("Screen clearing failed: {0}")]
     ClearScreen(#[from] clearscreen::Error),
+
+    #[error("Signal handling error: {0}")]
+    Signal(#[from] ctrlc::Error),
 }
