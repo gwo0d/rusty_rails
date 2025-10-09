@@ -13,12 +13,10 @@ use comfy_table::{
     modifiers::{UTF8_ROUND_CORNERS, UTF8_SOLID_INNER_BORDERS},
     presets::UTF8_FULL,
 };
-use crossterm::event::{self, Event};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dotenvy::dotenv;
 use service::{Board, BoardKind, Service, Station};
 use std::time::Duration;
-use tokio::time;
+use tokio::{signal, time};
 
 mod constants;
 mod error;
@@ -38,7 +36,7 @@ const REFRESH_INTERVAL_SECS: u64 = 15;
 #[command(
     name = "rusty_rails",
     author = "George O. Wood",
-    version = "2.1.3",
+    version = "2.1.4",
     about = "A CLI for fetching train departure and arrival boards.",
     long_about = None
 )]
@@ -72,22 +70,6 @@ enum Commands {
         #[arg(help = "The station code to get arrivals for.")]
         station_code: String,
     },
-}
-
-/// A guard struct to ensure terminal raw mode is disabled when it goes out of scope.
-///
-/// This struct uses the RAII (Resource Acquisition Is Initialization) pattern.
-/// When an instance of `RawModeGuard` is created, it doesn't perform any action,
-/// but when it is dropped (goes out of scope), its `drop` implementation is
-/// automatically called. This ensures that `disable_raw_mode()` is always called,
-/// preventing the terminal from being left in a raw state on exit or panic.
-struct RawModeGuard;
-
-impl Drop for RawModeGuard {
-    /// Disables terminal raw mode when the `RawModeGuard` is dropped.
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-    }
 }
 
 /// Creates and configures a new `comfy_table::Table` with default styling.
@@ -236,7 +218,10 @@ fn print_services(services: &[Service], kind: BoardKind) {
     println!("{table}");
 
     // Print exit/refresh instructions.
-    println!("[1m[3mPress any key to exit. Auto-refresh every {REFRESH_INTERVAL_SECS}s.[0m");
+    println!(
+        "[1m[3mAuto-refreshing every {}s. Press Ctrl+C to exit.[0m",
+        REFRESH_INTERVAL_SECS
+    );
 }
 
 /// Clears the screen and prints the given board details.
@@ -315,60 +300,39 @@ async fn main() -> Result<(), AppError> {
     let board = service::try_get_board(kind, &station_code, num_rows).await?;
     print_board_details(&board, kind, &station_code)?;
 
-    // Enable terminal raw mode to capture key presses without requiring Enter.
-    // The `_guard` ensures raw mode is disabled on exit.
-    enable_raw_mode()?;
-    let _guard = RawModeGuard;
-
     // Set up a timer for periodic refreshes.
     let mut interval = time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
 
-    // Main event loop.
+    // Main application loop.
+    // This loop uses `tokio::select!` to concurrently listen for two events:
+    // 1. A tick from the refresh interval.
+    // 2. A Ctrl+C signal from the user.
+    // The loop terminates immediately when a Ctrl+C signal is received.
     loop {
         tokio::select! {
-            // Listen for keyboard input in a blocking task.
-            key_res = tokio::task::spawn_blocking(event::read) => {
-                match key_res {
-                    // If any key is pressed, break the loop to exit.
-                    Ok(Ok(Event::Key(_))) => break,
-                    // Ignore other events.
-                    Ok(Ok(_)) => {},
-                    // Ignore read errors.
-                    Ok(Err(_)) => {},
-                    // If the input task itself fails, log the error and exit.
-                    Err(e) => {
-                        eprintln!("\nInput task failed: {e}. Exiting.");
-                        break;
-                    }
-                }
+            // Listen for the Ctrl+C signal.
+            _ = signal::ctrl_c() => {
+                // The signal future resolves, so we break the loop to exit.
+                break;
             }
-            // Trigger a refresh when the interval timer ticks.
+            // Wait for the refresh interval timer to tick.
             _ = interval.tick() => {
-                // Fetch the latest data first, while raw mode is still enabled.
+                // Fetch the latest service board data.
                 match service::try_get_board(kind, &station_code, num_rows).await {
                     Ok(board) => {
-                        // Now, briefly disable raw mode to print the board.
-                        disable_raw_mode()?;
                         if let Err(e) = print_board_details(&board, kind, &station_code) {
-                            eprintln!("Error printing board: {e}");
+                            eprintln!("Error printing board: {}", e);
                         }
-                        // Re-enable raw mode immediately after printing.
-                        enable_raw_mode()?;
                     }
                     Err(e) => {
-                        // If fetching fails, we can print the error without
-                        // disabling raw mode, as it won't interfere with input.
-                        eprintln!("Error refreshing services: {e}");
+                        eprintln!("Error refreshing services: {}", e);
                     }
                 }
             }
         }
     }
 
-    println!(
-        "
-Exiting..."
-    );
+    println!("\nExiting...");
 
     Ok(())
 }
